@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -99,26 +100,42 @@ int match_condition(Report *r, const char *field, const char *op,
                     const char *value) {
   if (strcmp(field, "severity") == 0) {
     int v = atoi(value), r_v = r->severity;
-    if (strcmp(op, "==") == 0) return r_v == v;
-    if (strcmp(op, "!=") == 0) return r_v != v;
-    if (strcmp(op, "<") == 0) return r_v < v;
-    if (strcmp(op, "<=") == 0) return r_v <= v;
-    if (strcmp(op, ">") == 0) return r_v > v;
-    if (strcmp(op, ">=") == 0) return r_v >= v;
+    if (strcmp(op, "==") == 0)
+      return r_v == v;
+    if (strcmp(op, "!=") == 0)
+      return r_v != v;
+    if (strcmp(op, "<") == 0)
+      return r_v < v;
+    if (strcmp(op, "<=") == 0)
+      return r_v <= v;
+    if (strcmp(op, ">") == 0)
+      return r_v > v;
+    if (strcmp(op, ">=") == 0)
+      return r_v >= v;
   } else if (strcmp(field, "category") == 0) {
-    if (strcmp(op, "==") == 0) return strcmp(r->category, value) == 0;
-    if (strcmp(op, "!=") == 0) return strcmp(r->category, value) != 0;
+    if (strcmp(op, "==") == 0)
+      return strcmp(r->category, value) == 0;
+    if (strcmp(op, "!=") == 0)
+      return strcmp(r->category, value) != 0;
   } else if (strcmp(field, "inspector") == 0) {
-    if (strcmp(op, "==") == 0) return strcmp(r->inspector, value) == 0;
-    if (strcmp(op, "!=") == 0) return strcmp(r->inspector, value) != 0;
+    if (strcmp(op, "==") == 0)
+      return strcmp(r->inspector, value) == 0;
+    if (strcmp(op, "!=") == 0)
+      return strcmp(r->inspector, value) != 0;
   } else if (strcmp(field, "timestamp") == 0) {
     time_t v = atoll(value), r_v = r->timestamp;
-    if (strcmp(op, "==") == 0) return r_v == v;
-    if (strcmp(op, "!=") == 0) return r_v != v;
-    if (strcmp(op, "<") == 0) return r_v < v;
-    if (strcmp(op, "<=") == 0) return r_v <= v;
-    if (strcmp(op, ">") == 0) return r_v > v;
-    if (strcmp(op, ">=") == 0) return r_v >= v;
+    if (strcmp(op, "==") == 0)
+      return r_v == v;
+    if (strcmp(op, "!=") == 0)
+      return r_v != v;
+    if (strcmp(op, "<") == 0)
+      return r_v < v;
+    if (strcmp(op, "<=") == 0)
+      return r_v <= v;
+    if (strcmp(op, ">") == 0)
+      return r_v > v;
+    if (strcmp(op, ">=") == 0)
+      return r_v >= v;
   }
   return 0;
 }
@@ -459,6 +476,52 @@ void cmd_filter(const char *district_id, const char *username,
   log_action(district_id, username, role_str, "filter");
 }
 
+void cmd_remove_district(const char *district_id, const char *role_str) {
+  if (strcmp(role_str, "manager") != 0) {
+    printf("Error: Only managers can remove districts.\n");
+    return;
+  }
+
+  if (strlen(district_id) == 0 || strchr(district_id, '/') != NULL ||
+      strcmp(district_id, ".") == 0 || strcmp(district_id, "..") == 0) {
+    printf("Error: Invalid or dangerous district name.\n");
+    return;
+  }
+
+  char symlink_path[MAX_PATH];
+  snprintf(symlink_path, MAX_PATH, "active_reports-%s", district_id);
+
+  printf("Removing symlink: %s\n", symlink_path);
+  if (unlink(symlink_path) < 0) {
+    perror("Warning: Failed to remove symlink (or it doesn't exist)");
+  }
+
+  printf("Spawning child process to remove directory: %s\n", district_id);
+  pid_t pid = fork();
+
+  if (pid < 0) {
+    perror("Error: fork failed");
+    return;
+  }
+
+  if (pid == 0) {
+    execlp("rm", "rm", "-rf", district_id, NULL);
+
+    perror("Error: execlp failed");
+    exit(1);
+  } else {
+
+    int status;
+    wait(&status);
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+      printf("District '%s' successfully removed.\n", district_id);
+    } else {
+      printf("Error: Child process (rm) failed or terminated abnormally.\n");
+    }
+  }
+}
+
 int main(int argc, char *argv[]) {
   Role role = ROLE_UNKNOWN;
   char username[64] = "";
@@ -509,7 +572,9 @@ int main(int argc, char *argv[]) {
 
   const char *role_str = (role == ROLE_MANAGER) ? "manager" : "inspector";
 
-  ensure_district(district_id);
+  if (strcmp(command, "--remove_district") != 0) {
+    ensure_district(district_id);
+  }
 
   if (strcmp(command, "--add") == 0) {
     cmd_add(district_id, username, role_str);
@@ -524,16 +589,19 @@ int main(int argc, char *argv[]) {
   } else if (strcmp(command, "--filter") == 0) {
     int arg_start_idx = -1;
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], district_id) == 0 && strcmp(argv[i-1], "--filter") == 0) {
-            arg_start_idx = i + 1;
-            break;
-        }
+      if (strcmp(argv[i], district_id) == 0 &&
+          strcmp(argv[i - 1], "--filter") == 0) {
+        arg_start_idx = i + 1;
+        break;
+      }
     }
     if (arg_start_idx != -1 && arg_start_idx < argc) {
-        cmd_filter(district_id, username, role_str, arg_start_idx, argc, argv);
+      cmd_filter(district_id, username, role_str, arg_start_idx, argc, argv);
     } else {
-        printf("Error: --filter requires at least one condition\n");
+      printf("Error: --filter requires at least one condition\n");
     }
+  } else if (strcmp(command, "--remove_district") == 0) {
+    cmd_remove_district(district_id, role_str);
   } else {
     printf("Command %s is not yet implemented.\n", command);
   }
