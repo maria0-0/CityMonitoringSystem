@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -270,7 +271,31 @@ void cmd_add(const char *district_id, const char *username,
 
   write(fd, &r, sizeof(Report));
   close(fd);
-  log_action(district_id, username, role_str, "add");
+
+  char log_msg[256];
+  int monitor_fd = open(".monitor_pid", O_RDONLY);
+  int signal_success = 0;
+
+  if (monitor_fd >= 0) {
+    char pid_buf[32];
+    memset(pid_buf, 0, sizeof(pid_buf));
+    if (read(monitor_fd, pid_buf, sizeof(pid_buf) - 1) > 0) {
+      pid_t monitor_pid = (pid_t)atoi(pid_buf);
+      if (monitor_pid > 0 && kill(monitor_pid, SIGUSR1) == 0) {
+        signal_success = 1;
+      }
+    }
+    close(monitor_fd);
+  }
+
+  if (signal_success) {
+    snprintf(log_msg, sizeof(log_msg), "add - Monitor notified successfully");
+  } else {
+    snprintf(log_msg, sizeof(log_msg),
+             "add - Monitor could not be informed of the event");
+  }
+
+  log_action(district_id, username, role_str, log_msg);
 }
 
 void cmd_list(const char *district_id, const char *username,
